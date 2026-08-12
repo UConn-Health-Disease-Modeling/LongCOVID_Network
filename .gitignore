@@ -1,0 +1,13 @@
+# local/session files
+.claude/
+projects/
+COMPS_log.log
+*.log
+
+# analysis outputs
+output/
+output_worked_example/
+
+# OS
+.DS_Store
+Thumbs.db

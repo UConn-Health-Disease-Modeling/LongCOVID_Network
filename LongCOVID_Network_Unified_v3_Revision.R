@@ -26,6 +26,19 @@
 #                            (8-panel Infected/Uninfected x time bin)
 #     Figure S4              delta_pagerank_heatmap.png
 #                            (symptom × timebin Δ PageRank, B = 300)
+#     Figure S5              delta_pagerank_slopes_forest.png
+#                            (per-symptom slope of Δ over time)
+#
+#   Revision (Response to Reviewer #3, 2026-08; prefix "revision_")
+#     5A  Prevalence vs structure: symptom-count distributions,
+#         prevalence-preserving null models (column permutation +
+#         fixed-margin curveball), density-gap decomposition,
+#         PageRank reordering test, normalization concordance
+#     5B  Strength vs weighted PageRank scatter + Spearman rho
+#     5C  Attrition table, cluster (individual-level) bootstrap,
+#         one-observation-per-person sensitivity, within-window null
+#     5D  Ising/eLasso networks + Network Comparison Test
+#     5E  Synthetic dataset + prevalence verification
 #
 # Pipeline sections:
 #   0.  Setup & output directories
@@ -38,6 +51,8 @@
 #   4D. Time-bin network analysis                   -> Fig S3 inputs
 #   4E. Bootstrap & permutation inference           -> Fig 3, Table S2
 #   4F. Δ PageRank quantification (B = 300)         -> Fig S4
+#   4G. Δ PageRank slopes (restored from _final)    -> Fig S5
+#   5A-5E. Revision analyses (Reviewer #3)          -> revision_* files
 ########################################################################
 
 ########################################################################
@@ -58,7 +73,7 @@ suppressPackageStartupMessages({
   library(survey)
 })
 
-out_dir <- "C:/Users/young/UConn Health Center/Zeyu/P6_LongCOVID_Network/Output"
+out_dir <- "output"
 dir.create(file.path(out_dir, "tables"),  recursive = TRUE, showWarnings = FALSE)
 dir.create(file.path(out_dir, "figures"), recursive = TRUE, showWarnings = FALSE)
 dir.create(file.path(out_dir, "data"),    recursive = TRUE, showWarnings = FALSE)
@@ -67,7 +82,12 @@ dir.create(file.path(out_dir, "data"),    recursive = TRUE, showWarnings = FALSE
 # 1. USER CONFIGURATION
 ########################################################################
 
-data_path   <- "C:/Users/young/UConn Health Center/Zeyu/P4_ LongCOVID/data/combined_longcovid.xlsx"
+# Path to the analysis dataset. The original cohort data are governed by
+# the KDCA and cannot be redistributed; by default this points to the
+# fully synthetic dataset shipped with this repository, which mirrors the
+# variable schema and per-group marginal symptom prevalences of the cohort.
+# Authorized users of the original data should set this path accordingly.
+data_path   <- "data/synthetic_longcovid.xlsx"
 
 id_col      <- "SUBJ_ID"
 infect_col  <- "infected"      # 0 = uninfected, 1 = infected
@@ -2001,3 +2021,930 @@ print(p_delta_heatmap)
 message("\nQuantitative Delta PageRank summary done.\nFigure saved: ",
         file.path(out_dir, "figures", "delta_pagerank_heatmap.png"))
 
+
+
+########################################################################
+# 4G. PER-SYMPTOM SLOPE OF Delta PAGERANK OVER TIME  (Fig S5)
+########################################################################
+# Restored from LongCOVID_Network_Unified_final.R (this block was
+# present there but absent from Unified_v2). The manuscript Supplement
+# references Figures S3-S5; S5 = delta_pagerank_slopes_forest.png.
+# Requires `boot_delta` from Section 4F.
+########################################################################
+
+# -- Per-symptom slope of Delta over time ----------------------------
+compute_slope_by_symptom <- function(boot_delta,
+                                     timebin_midpoints = c("0-3"  = 1.5,
+                                                           "3-6"  = 4.5,
+                                                           "6-12" = 9,
+                                                           "12-24"= 18)) {
+  boot_delta %>%
+    dplyr::mutate(t = unname(timebin_midpoints[as.character(timebin)])) %>%
+    dplyr::group_by(symptom, b) %>%
+    dplyr::summarise(
+      slope = if (sum(!is.na(delta)) >= 2) unname(stats::coef(stats::lm(delta ~ t))[2]) else NA_real_,
+      .groups = "drop"
+    ) %>%
+    dplyr::group_by(symptom) %>%
+    dplyr::summarise(
+      slope_mean = mean(slope, na.rm = TRUE),
+      slope_lcl  = stats::quantile(slope, 0.025, na.rm = TRUE),
+      slope_ucl  = stats::quantile(slope, 0.975, na.rm = TRUE),
+      sig        = (stats::quantile(slope, 0.025, na.rm = TRUE) > 0) |
+                   (stats::quantile(slope, 0.975, na.rm = TRUE) < 0),
+      .groups = "drop"
+    )
+}
+
+slope_summary <- compute_slope_by_symptom(boot_delta)
+
+write.csv(slope_summary,
+          file.path(out_dir, "tables", "delta_pagerank_slopes_by_symptom.csv"),
+          row.names = FALSE)
+
+slope_summary_plot <- slope_summary %>%
+  dplyr::mutate(symptom_clean = clean_symptom_names(symptom)) %>%
+  dplyr::arrange(slope_mean) %>%
+  dplyr::mutate(
+    symptom_clean = factor(symptom_clean, levels = symptom_clean),
+    sig_label     = ifelse(sig, "95% CI excludes 0", "ns")
+  )
+
+p_slope_forest <- ggplot(slope_summary_plot,
+                         aes(x = slope_mean, y = symptom_clean, color = sig_label)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey60") +
+  geom_errorbar(aes(xmin = slope_lcl, xmax = slope_ucl),
+                width = 0.3, alpha = 0.85, linewidth = 0.5,
+                orientation = "y") +
+  geom_point(size = 2.5) +
+  scale_color_manual(
+    values = c("95% CI excludes 0" = "#d73027", "ns" = "grey50"),
+    name   = NULL
+  ) +
+  labs(
+    title    = "Per-symptom slope of Delta PageRank over time",
+    subtitle = paste0("Slope of (Infected - Uninfected) Delta PageRank vs. time (months);\n",
+                      "bootstrap mean & 95% CI, B = ", n_boot_pr),
+    x = "Slope of Delta PageRank per month",
+    y = NULL
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    legend.position = "bottom",
+    plot.title      = element_text(face = "bold"),
+    panel.grid.minor = element_blank()
+  )
+
+ggsave(
+  file.path(out_dir, "figures", "delta_pagerank_slopes_forest.png"),
+  p_slope_forest,
+  width = 8, height = 9.5, dpi = 300
+)
+print(p_slope_forest)
+
+########################################################################
+# 5. REVISION ANALYSES (Response to Reviewer #3, 2026-08 revision)
+########################################################################
+# Five new analyses promised in the response letter:
+#   5A. Prevalence-driven vs structure-driven effects (Comment 3.1)
+#       - per-group symptom-count distributions
+#       - Null A: prevalence-preserving column permutation
+#         (holds per-symptom prevalence fixed, breaks dependence)
+#       - Null B: fixed-margin (curveball) randomization
+#         (holds BOTH per-person symptom counts and per-symptom
+#          prevalence fixed) -> tests modularity, assortativity,
+#          and PageRank reordering as count-adjusted "structure"
+#       - density-gap decomposition (prevalence component vs residual)
+#       - normalized edge-weight sensitivity (concordance check)
+#   5B. Strength vs weighted PageRank correlation (Comment 3.2)
+#   5C. Longitudinal robustness (Comment 3.3)
+#       - CONSORT-style attrition table
+#       - individual-level (cluster) bootstrap
+#       - one-observation-per-person sensitivity
+#       - within-window fixed-margin null comparison
+#   5D. Network Comparison Test validation, Ising/eLasso (Comment 3.4)
+#   5E. Synthetic dataset for reproducibility (Comment 3.5)
+#
+# All outputs carry the prefix "revision_" in <out_dir>/tables and
+# <out_dir>/figures.
+########################################################################
+
+# ---- Revision configuration -----------------------------------------
+n_null          <- 200    # null-model replicates (5A, 5C); 500 for final
+n_boot_cluster  <- 300    # cluster-bootstrap replicates (5C); reduce to 50 for testing
+nct_iterations  <- 1000   # NCT permutation iterations (5D)
+seed_null       <- 789
+seed_cluster    <- 321
+seed_synth      <- 20260810
+
+########################################################################
+# 5A. PREVALENCE-DRIVEN vs STRUCTURE-DRIVEN EFFECTS (Comment 3.1)
+########################################################################
+
+message("\n[5A] Prevalence-preserving null models ...")
+
+# -- Person x symptom binary matrix per group -------------------------
+get_binary_matrix <- function(data, symptom_cols) {
+  X <- data %>%
+    dplyr::select(dplyr::all_of(symptom_cols)) %>%
+    dplyr::mutate(dplyr::across(dplyr::everything(), to01)) %>%
+    as.matrix()
+  storage.mode(X) <- "integer"
+  X
+}
+
+X0 <- get_binary_matrix(df_clean %>% dplyr::filter(.data[[infect_col]] == 0), symptom_cols)
+X1 <- get_binary_matrix(df_clean %>% dplyr::filter(.data[[infect_col]] == 1), symptom_cols)
+
+# -- (i) Symptom-count distributions ----------------------------------
+count_dist <- dplyr::bind_rows(
+  tibble::tibble(group = "Uninfected", n_symptoms = rowSums(X0)),
+  tibble::tibble(group = "Infected",   n_symptoms = rowSums(X1))
+)
+
+count_summary <- count_dist %>%
+  dplyr::group_by(group) %>%
+  dplyr::summarise(
+    n_participants = dplyr::n(),
+    mean_symptoms  = mean(n_symptoms),
+    sd_symptoms    = sd(n_symptoms),
+    median         = median(n_symptoms),
+    q25            = quantile(n_symptoms, 0.25),
+    q75            = quantile(n_symptoms, 0.75),
+    max            = max(n_symptoms),
+    pct_zero       = mean(n_symptoms == 0) * 100,
+    .groups = "drop"
+  )
+message("Per-group symptom-count distribution:")
+print(count_summary)
+write.csv(count_summary,
+          file.path(out_dir, "tables", "revision_5A_symptom_count_summary.csv"),
+          row.names = FALSE)
+
+p_counts <- ggplot(count_dist, aes(x = n_symptoms, y = after_stat(density), fill = group)) +
+  geom_histogram(binwidth = 1, position = "dodge", color = "white", linewidth = 0.2) +
+  scale_fill_manual(values = c("Uninfected" = "#377EB8", "Infected" = "#E41A1C")) +
+  labs(x = "Number of symptoms reported per person",
+       y = "Density",
+       title = "Per-person symptom-count distribution by infection status",
+       fill = NULL) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "bottom")
+ggsave(file.path(out_dir, "figures", "revision_5A_symptom_count_distribution.png"),
+       p_counts, width = 8, height = 5, dpi = 300)
+
+# -- Network metrics directly from a binary matrix --------------------
+metrics_from_matrix <- function(X, symptom_cols) {
+  O <- crossprod(X)
+  diag(O) <- 0
+  dimnames(O) <- list(symptom_cols, symptom_cols)
+  m <- compute_network_metrics_adj(O)
+  list(density       = m$density,
+       modularity    = m$modularity,
+       assortativity = m$assortativity,
+       pagerank      = m$pagerank[symptom_cols])
+}
+
+m_obs0 <- metrics_from_matrix(X0, symptom_cols)
+m_obs1 <- metrics_from_matrix(X1, symptom_cols)
+
+# -- Null A: independent column permutation ---------------------------
+# Holds each symptom's prevalence fixed; destroys within-person
+# dependence (per-person counts become what independence implies).
+# The density expected under Null A is the prevalence-driven component.
+shuffle_columns <- function(X) {
+  Xs <- apply(X, 2, sample)
+  storage.mode(Xs) <- "integer"
+  Xs
+}
+
+# -- Null B: curveball (fixed-margin) randomization -------------------
+# Holds BOTH per-person symptom counts (row sums) and per-symptom
+# prevalence (column sums) fixed. Total co-occurrence weight
+# sum_i C(k_i, 2) is preserved by construction, so weighted density is
+# invariant under Null B; deviations in modularity, assortativity, and
+# PageRank ordering are therefore count- and prevalence-adjusted
+# "structural" signal (the operational definition adopted in the text).
+curveball_randomize <- function(X, n_iter = 10 * nrow(X)) {
+  n <- nrow(X)
+  for (i in seq_len(n_iter)) {
+    rows <- sample.int(n, 2)
+    r1 <- X[rows[1], ]; r2 <- X[rows[2], ]
+    only1 <- which(r1 == 1L & r2 == 0L)
+    only2 <- which(r1 == 0L & r2 == 1L)
+    k1 <- length(only1)
+    if (k1 == 0L || length(only2) == 0L) next
+    pool <- c(only1, only2)
+    new1 <- if (length(pool) == 1L) pool else sample(pool, k1)
+    X[rows[1], pool] <- 0L
+    X[rows[2], pool] <- 0L
+    X[rows[1], new1] <- 1L
+    X[rows[2], setdiff(pool, new1)] <- 1L
+  }
+  X
+}
+
+run_null_metrics <- function(X, symptom_cols, B, type = c("colperm", "curveball"), seed) {
+  type <- match.arg(type)
+  set.seed(seed)
+  res <- vector("list", B)
+  for (b in seq_len(B)) {
+    Xb <- if (type == "colperm") shuffle_columns(X) else curveball_randomize(X)
+    m  <- metrics_from_matrix(Xb, symptom_cols)
+    res[[b]] <- tibble::tibble(
+      b             = b,
+      density       = m$density,
+      modularity    = m$modularity,
+      assortativity = m$assortativity,
+      pagerank      = list(m$pagerank)
+    )
+  }
+  dplyr::bind_rows(res)
+}
+
+message("  Null A (column permutation), B = ", n_null, " per group ...")
+nullA0 <- run_null_metrics(X0, symptom_cols, n_null, "colperm",   seed_null)
+nullA1 <- run_null_metrics(X1, symptom_cols, n_null, "colperm",   seed_null + 1)
+message("  Null B (curveball fixed-margin), B = ", n_null, " per group ...")
+nullB0 <- run_null_metrics(X0, symptom_cols, n_null, "curveball", seed_null + 2)
+nullB1 <- run_null_metrics(X1, symptom_cols, n_null, "curveball", seed_null + 3)
+
+# -- Empirical two-sided p and z-score helpers ------------------------
+emp_p <- function(null_vals, obs) {
+  null_vals <- null_vals[!is.na(null_vals)]
+  if (length(null_vals) == 0 || is.na(obs)) return(NA_real_)
+  p <- 2 * min(mean(null_vals >= obs), mean(null_vals <= obs))
+  max(p, 1 / length(null_vals))
+}
+z_score <- function(null_vals, obs) {
+  (obs - mean(null_vals, na.rm = TRUE)) / sd(null_vals, na.rm = TRUE)
+}
+
+# -- Density-gap decomposition (uses Null A) --------------------------
+gap_obs        <- m_obs1$density - m_obs0$density
+gap_null_A     <- mean(nullA1$density) - mean(nullA0$density)   # prevalence-driven
+gap_residual   <- gap_obs - gap_null_A                          # structure-driven
+
+density_decomposition <- tibble::tibble(
+  quantity = c("Observed density (Uninfected)",
+               "Observed density (Infected)",
+               "Observed density gap (Inf - Uninf)",
+               "Prevalence-driven gap (Null A expectation)",
+               "Structure-driven residual (Obs - Null A)",
+               "Share of gap explained by prevalence (%)"),
+  value    = c(m_obs0$density, m_obs1$density, gap_obs,
+               gap_null_A, gap_residual,
+               100 * gap_null_A / gap_obs)
+)
+message("Density-gap decomposition:")
+print(as.data.frame(density_decomposition))
+write.csv(density_decomposition,
+          file.path(out_dir, "tables", "revision_5A_density_decomposition.csv"),
+          row.names = FALSE)
+
+# -- Observed vs null summary for global metrics ----------------------
+null_summary <- dplyr::bind_rows(
+  tibble::tibble(group = "Uninfected", null = "A: prevalence-only",
+                 metric = c("density", "modularity", "assortativity"),
+                 observed  = c(m_obs0$density, m_obs0$modularity, m_obs0$assortativity),
+                 null_mean = c(mean(nullA0$density), mean(nullA0$modularity), mean(nullA0$assortativity)),
+                 z = c(z_score(nullA0$density, m_obs0$density),
+                       z_score(nullA0$modularity, m_obs0$modularity),
+                       z_score(nullA0$assortativity, m_obs0$assortativity)),
+                 p = c(emp_p(nullA0$density, m_obs0$density),
+                       emp_p(nullA0$modularity, m_obs0$modularity),
+                       emp_p(nullA0$assortativity, m_obs0$assortativity))),
+  tibble::tibble(group = "Infected", null = "A: prevalence-only",
+                 metric = c("density", "modularity", "assortativity"),
+                 observed  = c(m_obs1$density, m_obs1$modularity, m_obs1$assortativity),
+                 null_mean = c(mean(nullA1$density), mean(nullA1$modularity), mean(nullA1$assortativity)),
+                 z = c(z_score(nullA1$density, m_obs1$density),
+                       z_score(nullA1$modularity, m_obs1$modularity),
+                       z_score(nullA1$assortativity, m_obs1$assortativity)),
+                 p = c(emp_p(nullA1$density, m_obs1$density),
+                       emp_p(nullA1$modularity, m_obs1$modularity),
+                       emp_p(nullA1$assortativity, m_obs1$assortativity))),
+  tibble::tibble(group = "Uninfected", null = "B: fixed-margin (curveball)",
+                 metric = c("density", "modularity", "assortativity"),
+                 observed  = c(m_obs0$density, m_obs0$modularity, m_obs0$assortativity),
+                 null_mean = c(mean(nullB0$density), mean(nullB0$modularity), mean(nullB0$assortativity)),
+                 z = c(NA,  # density invariant under fixed margins
+                       z_score(nullB0$modularity, m_obs0$modularity),
+                       z_score(nullB0$assortativity, m_obs0$assortativity)),
+                 p = c(NA,
+                       emp_p(nullB0$modularity, m_obs0$modularity),
+                       emp_p(nullB0$assortativity, m_obs0$assortativity))),
+  tibble::tibble(group = "Infected", null = "B: fixed-margin (curveball)",
+                 metric = c("density", "modularity", "assortativity"),
+                 observed  = c(m_obs1$density, m_obs1$modularity, m_obs1$assortativity),
+                 null_mean = c(mean(nullB1$density), mean(nullB1$modularity), mean(nullB1$assortativity)),
+                 z = c(NA,
+                       z_score(nullB1$modularity, m_obs1$modularity),
+                       z_score(nullB1$assortativity, m_obs1$assortativity)),
+                 p = c(NA,
+                       emp_p(nullB1$modularity, m_obs1$modularity),
+                       emp_p(nullB1$assortativity, m_obs1$assortativity)))
+)
+message("Observed vs null-model global metrics:")
+print(as.data.frame(null_summary))
+write.csv(null_summary,
+          file.path(out_dir, "tables", "revision_5A_null_model_summary.csv"),
+          row.names = FALSE)
+
+# -- Delta (Infected - Uninfected) contrasts under paired null reps ---
+delta_null_tests <- tibble::tibble(
+  metric   = c("delta_modularity", "delta_assortativity"),
+  observed = c(m_obs1$modularity   - m_obs0$modularity,
+               m_obs1$assortativity - m_obs0$assortativity),
+  nullB_mean = c(mean(nullB1$modularity   - nullB0$modularity),
+                 mean(nullB1$assortativity - nullB0$assortativity)),
+  z = c(z_score(nullB1$modularity   - nullB0$modularity,
+                m_obs1$modularity   - m_obs0$modularity),
+        z_score(nullB1$assortativity - nullB0$assortativity,
+                m_obs1$assortativity - m_obs0$assortativity)),
+  p = c(emp_p(nullB1$modularity   - nullB0$modularity,
+              m_obs1$modularity   - m_obs0$modularity),
+        emp_p(nullB1$assortativity - nullB0$assortativity,
+              m_obs1$assortativity - m_obs0$assortativity))
+)
+message("Delta contrasts vs fixed-margin null:")
+print(as.data.frame(delta_null_tests))
+write.csv(delta_null_tests,
+          file.path(out_dir, "tables", "revision_5A_delta_vs_null.csv"),
+          row.names = FALSE)
+
+# -- PageRank reordering test (uses Null B) ---------------------------
+# Statistic: Spearman correlation between the infected and uninfected
+# PageRank vectors. Low observed concordance relative to the null
+# indicates that the infection-associated reordering of influential
+# symptoms exceeds what count + prevalence differences alone produce.
+rho_obs <- cor(m_obs1$pagerank, m_obs0$pagerank, method = "spearman")
+rho_null <- vapply(seq_len(n_null), function(b) {
+  cor(nullB1$pagerank[[b]], nullB0$pagerank[[b]], method = "spearman")
+}, numeric(1))
+p_reorder <- max(mean(rho_null <= rho_obs), 1 / n_null)  # one-sided: more reordering than null
+
+pagerank_reordering <- tibble::tibble(
+  statistic = "Spearman rho (Infected vs Uninfected PageRank)",
+  observed  = rho_obs,
+  null_mean = mean(rho_null),
+  null_lcl  = quantile(rho_null, 0.025),
+  null_ucl  = quantile(rho_null, 0.975),
+  p_one_sided = p_reorder
+)
+message("PageRank reordering vs fixed-margin null:")
+print(as.data.frame(pagerank_reordering))
+write.csv(pagerank_reordering,
+          file.path(out_dir, "tables", "revision_5A_pagerank_reordering_test.csv"),
+          row.names = FALSE)
+
+# -- (iv) Normalized edge-weight sensitivity --------------------------
+# build_adj() already supports normalization; report concordance of the
+# differential results with the primary (raw-count) analysis.
+message("  Normalized edge-weight sensitivity (expected, cosine) ...")
+fit_expected <- fit_two_group_networks(df_clean, symptom_cols, infect_col,
+                                       weight_col = NULL, normalize = "expected")
+fit_cosine   <- fit_two_group_networks(df_clean, symptom_cols, infect_col,
+                                       weight_col = NULL, normalize = "cosine")
+
+concordance_tab <- tibble::tibble(
+  normalization = c("expected (obs/exp under independence)", "cosine"),
+  spearman_delta_pagerank = c(
+    cor(baseline_fit$node$delta_pagerank, fit_expected$node$delta_pagerank, method = "spearman"),
+    cor(baseline_fit$node$delta_pagerank, fit_cosine$node$delta_pagerank,   method = "spearman")),
+  spearman_delta_strength = c(
+    cor(baseline_fit$node$delta_strength, fit_expected$node$delta_strength, method = "spearman"),
+    cor(baseline_fit$node$delta_strength, fit_cosine$node$delta_strength,   method = "spearman")),
+  delta_modularity = c(fit_expected$global$delta_modularity,
+                       fit_cosine$global$delta_modularity),
+  delta_assortativity = c(fit_expected$global$delta_assortativity,
+                          fit_cosine$global$delta_assortativity)
+)
+message("Concordance of normalized vs raw-count differential results:")
+print(as.data.frame(concordance_tab))
+write.csv(concordance_tab,
+          file.path(out_dir, "tables", "revision_5A_normalization_concordance.csv"),
+          row.names = FALSE)
+
+########################################################################
+# 5B. STRENGTH vs WEIGHTED PAGERANK (Comment 3.2)
+########################################################################
+
+message("\n[5B] Strength vs PageRank correlation ...")
+
+node_sp <- dplyr::bind_rows(
+  baseline_fit$node %>%
+    dplyr::transmute(group = "A. Uninfected", symptom,
+                     strength = strength_0, pagerank = pagerank_0),
+  baseline_fit$node %>%
+    dplyr::transmute(group = "B. Infected", symptom,
+                     strength = strength_1, pagerank = pagerank_1)
+) %>%
+  dplyr::mutate(symptom_clean = clean_symptom_names(symptom),
+                category      = factor(symptom_category(symptom),
+                                       levels = category_levels_fixed))
+
+rho_sp <- node_sp %>%
+  dplyr::group_by(group) %>%
+  dplyr::summarise(
+    spearman_rho = cor(strength, pagerank, method = "spearman"),
+    pearson_r    = cor(strength, pagerank, method = "pearson"),
+    n_symptoms   = dplyr::n(),
+    .groups = "drop"
+  )
+message("Strength-PageRank correlation by network:")
+print(as.data.frame(rho_sp))
+write.csv(rho_sp,
+          file.path(out_dir, "tables", "revision_5B_strength_pagerank_correlation.csv"),
+          row.names = FALSE)
+write.csv(node_sp %>% dplyr::select(-category),
+          file.path(out_dir, "tables", "revision_5B_strength_pagerank_by_symptom.csv"),
+          row.names = FALSE)
+
+rho_labels <- rho_sp %>%
+  dplyr::mutate(label = sprintf("Spearman rho = %.3f", spearman_rho))
+
+p_sp_scatter <- ggplot(node_sp, aes(x = strength, y = pagerank)) +
+  geom_smooth(method = "lm", se = FALSE, color = "grey60",
+              linetype = "dashed", linewidth = 0.6) +
+  geom_point(aes(color = category), size = 2.5, alpha = 0.9) +
+  geom_text_repel(aes(label = symptom_clean), size = 3, max.overlaps = 100) +
+  geom_text(data = rho_labels,
+            aes(x = -Inf, y = Inf, label = label),
+            hjust = -0.1, vjust = 1.5, size = 3.8, fontface = "italic",
+            inherit.aes = FALSE) +
+  facet_wrap(~ group, scales = "free") +
+  scale_color_manual(values = category_colors, drop = FALSE) +
+  labs(x = "Node strength (sum of incident edge weights)",
+       y = "Weighted PageRank",
+       title = "Most connected vs most influential: strength against weighted PageRank",
+       subtitle = "Within-network ranks are nearly identical (rho = 0.999); influence redistribution appears between networks",
+       color = "Category") +
+  theme_bw(base_size = 12) +
+  theme(strip.text = element_text(face = "bold"),
+        legend.position = "bottom")
+ggsave(file.path(out_dir, "figures", "revision_5B_strength_vs_pagerank.png"),
+       p_sp_scatter, width = 13, height = 7, dpi = 300)
+print(p_sp_scatter)
+
+########################################################################
+# 5C. LONGITUDINAL ROBUSTNESS (Comment 3.3)
+########################################################################
+
+if (exists("df2")) {
+
+  message("\n[5C] Longitudinal robustness analyses ...")
+
+  # -- (i) CONSORT-style attrition table ------------------------------
+  attrition_tab <- df2 %>%
+    dplyr::filter(!is.na(timebin), as.character(timebin) %in% timebins) %>%
+    dplyr::group_by(infected01, timebin) %>%
+    dplyr::summarise(
+      n_participants = dplyr::n_distinct(.data[[id_col]]),
+      n_observations = dplyr::n(),
+      .groups = "drop"
+    ) %>%
+    dplyr::left_join(
+      metrics_df %>%
+        dplyr::mutate(timebin = as.character(timebin)) %>%
+        dplyr::select(infected, timebin, nodes, edges),
+      by = c("infected01" = "infected", "timebin")
+    ) %>%
+    dplyr::mutate(
+      group = ifelse(infected01 == 1, "Infected", "Uninfected"),
+      pct_symptoms_estimable = round(100 * nodes / length(symptom_cols), 1),
+      timebin = factor(timebin, levels = timebins)
+    ) %>%
+    dplyr::arrange(dplyr::desc(group == "Uninfected"), timebin) %>%
+    dplyr::select(group, timebin, n_participants, n_observations,
+                  nodes, edges, pct_symptoms_estimable)
+  message("Attrition by window and group:")
+  print(as.data.frame(attrition_tab))
+  write.csv(attrition_tab,
+            file.path(out_dir, "tables", "revision_5C_attrition_table.csv"),
+            row.names = FALSE)
+
+  # -- (ii) Individual-level (cluster) bootstrap ----------------------
+  # Resamples PERSONS (with all their visits) rather than person-window
+  # rows, so CIs reflect within-person correlation across windows.
+  # Duplicated persons receive pseudo-IDs so each draw counts as a
+  # distinct co-occurrence unit.
+  cluster_bootstrap_timebin <- function(df2, id_col, symptom_cols,
+                                        timebins, B, seed) {
+    set.seed(seed)
+    out <- list(); k <- 1
+    for (grp in c(0, 1)) {
+      df_g <- df2 %>%
+        dplyr::filter(infected01 == grp, !is.na(timebin),
+                      as.character(timebin) %in% timebins)
+      ids        <- unique(df_g[[id_col]])
+      rows_by_id <- split(seq_len(nrow(df_g)), df_g[[id_col]])
+      for (b in seq_len(B)) {
+        samp_ids <- sample(ids, length(ids), replace = TRUE)
+        idx_list <- rows_by_id[as.character(samp_ids)]
+        samp     <- df_g[unlist(idx_list, use.names = FALSE), , drop = FALSE]
+        samp[[id_col]] <- rep(paste0("bs", seq_along(samp_ids)),
+                              lengths(idx_list))
+        for (tb in timebins) {
+          samp_tb <- samp %>% dplyr::filter(as.character(timebin) == tb)
+          if (nrow(samp_tb) < 2) next
+          net <- build_symptom_network_timeslice(samp_tb, id_col,
+                                                 symptom_cols, "timebin")
+          g <- net$graph
+          out[[k]] <- tibble::tibble(
+            infected = grp, timebin = tb, b = b,
+            weighted_density = if (igraph::ecount(g) > 0) {
+              sum(igraph::E(g)$weight) /
+                (igraph::vcount(g) * (igraph::vcount(g) - 1) / 2)
+            } else NA_real_,
+            modularity             = modularity_safe(net$comm),
+            pagerank_gini          = pagerank_gini_safe(g),
+            strength_assortativity = if (igraph::ecount(g) > 0)
+              weighted_assortativity_strength(g) else NA_real_
+          )
+          k <- k + 1
+        }
+      }
+      message("  cluster bootstrap done for group ", grp)
+    }
+    dplyr::bind_rows(out)
+  }
+
+  message("  Cluster bootstrap (B = ", n_boot_cluster, ") ...")
+  cluster_boot <- cluster_bootstrap_timebin(df2, id_col, symptom_cols,
+                                            timebins, n_boot_cluster,
+                                            seed_cluster)
+
+  cluster_ci <- cluster_boot %>%
+    dplyr::group_by(infected, timebin) %>%
+    dplyr::summarise(
+      wd_lcl_cluster     = quantile(weighted_density, 0.025, na.rm = TRUE),
+      wd_ucl_cluster     = quantile(weighted_density, 0.975, na.rm = TRUE),
+      mod_lcl_cluster    = quantile(modularity, 0.025, na.rm = TRUE),
+      mod_ucl_cluster    = quantile(modularity, 0.975, na.rm = TRUE),
+      pg_lcl_cluster     = quantile(pagerank_gini, 0.025, na.rm = TRUE),
+      pg_ucl_cluster     = quantile(pagerank_gini, 0.975, na.rm = TRUE),
+      assort_lcl_cluster = quantile(strength_assortativity, 0.025, na.rm = TRUE),
+      assort_ucl_cluster = quantile(strength_assortativity, 0.975, na.rm = TRUE),
+      .groups = "drop"
+    )
+
+  # Side-by-side with the original row-level bootstrap CIs
+  ci_comparison <- metrics_ci %>%
+    dplyr::left_join(cluster_ci, by = c("infected", "timebin")) %>%
+    dplyr::left_join(
+      metrics_df %>%
+        dplyr::mutate(timebin = as.character(timebin)) %>%
+        dplyr::select(infected, timebin, weighted_density, modularity,
+                      pagerank_gini, strength_assortativity),
+      by = c("infected", "timebin")
+    ) %>%
+    dplyr::select(infected, timebin,
+                  weighted_density, wd_lcl, wd_ucl, wd_lcl_cluster, wd_ucl_cluster,
+                  modularity, mod_lcl, mod_ucl, mod_lcl_cluster, mod_ucl_cluster,
+                  pagerank_gini, pg_lcl, pg_ucl, pg_lcl_cluster, pg_ucl_cluster,
+                  strength_assortativity, assort_lcl, assort_ucl,
+                  assort_lcl_cluster, assort_ucl_cluster)
+  message("Row-level vs cluster-bootstrap CI comparison:")
+  print(as.data.frame(ci_comparison))
+  write.csv(ci_comparison,
+            file.path(out_dir, "tables", "revision_5C_cluster_bootstrap_ci_comparison.csv"),
+            row.names = FALSE)
+  saveRDS(cluster_boot, file.path(out_dir, "data", "revision_5C_cluster_boot_raw.rds"))
+
+  # -- (iii) One-window-per-person sensitivity ------------------------
+  # NOTE: restricting each person to their earliest (index) observation
+  # is degenerate here because nearly all first visits fall in the 0-3
+  # month window, which empties the later bins. Instead, each person is
+  # restricted to ONE randomly selected window among those they were
+  # observed in (keeping all of their visits within that window), so
+  # every window retains participants while no person contributes to
+  # more than one window.
+  set.seed(seed_cluster + 1)
+  person_window_pick <- df2 %>%
+    dplyr::filter(!is.na(timebin), as.character(timebin) %in% timebins) %>%
+    dplyr::select(dplyr::all_of(id_col), timebin) %>%
+    dplyr::distinct() %>%
+    dplyr::group_by(.data[[id_col]]) %>%
+    dplyr::slice_sample(n = 1) %>%
+    dplyr::ungroup()
+  df2_index <- df2 %>%
+    dplyr::filter(!is.na(timebin), as.character(timebin) %in% timebins) %>%
+    dplyr::semi_join(person_window_pick, by = c(id_col, "timebin"))
+
+  one_obs_metrics <- list(); k <- 1
+  for (grp in c(0, 1)) {
+    for (tb in timebins) {
+      df_sub <- df2_index %>%
+        dplyr::filter(infected01 == grp, as.character(timebin) == tb)
+      if (nrow(df_sub) < 2) next
+      net <- build_symptom_network_timeslice(df_sub, id_col, symptom_cols, "timebin")
+      g <- net$graph
+      one_obs_metrics[[k]] <- tibble::tibble(
+        infected = grp, timebin = tb,
+        n_participants = dplyr::n_distinct(df_sub[[id_col]]),
+        nodes = igraph::vcount(g), edges = igraph::ecount(g),
+        weighted_density = if (igraph::ecount(g) > 0) {
+          sum(igraph::E(g)$weight) /
+            (igraph::vcount(g) * (igraph::vcount(g) - 1) / 2)
+        } else NA_real_,
+        modularity             = modularity_safe(net$comm),
+        pagerank_gini          = pagerank_gini_safe(g),
+        strength_assortativity = if (igraph::ecount(g) > 0)
+          weighted_assortativity_strength(g) else NA_real_
+      )
+      k <- k + 1
+    }
+  }
+  one_obs_df <- dplyr::bind_rows(one_obs_metrics) %>%
+    dplyr::mutate(group   = ifelse(infected == 1, "Infected", "Uninfected"),
+                  timebin = factor(timebin, levels = timebins))
+  message("One-observation-per-person window metrics:")
+  print(as.data.frame(one_obs_df))
+  write.csv(one_obs_df,
+            file.path(out_dir, "tables", "revision_5C_one_obs_per_person_metrics.csv"),
+            row.names = FALSE)
+
+  p_one_obs <- ggplot(one_obs_df,
+                      aes(x = timebin, y = weighted_density,
+                          group = group, color = group)) +
+    geom_line() + geom_point(size = 2) +
+    scale_color_manual(values = c("Uninfected" = "#377EB8",
+                                  "Infected"   = "#E41A1C")) +
+    theme_minimal(base_size = 13) +
+    labs(x = "Months since infection", y = "Weighted density",
+         title = "Sensitivity: one window per person",
+         subtitle = "Each participant contributes to a single randomly selected time window",
+         color = NULL)
+  ggsave(file.path(out_dir, "figures", "revision_5C_one_obs_trend_density.png"),
+         p_one_obs, width = 8, height = 4.5, dpi = 300)
+
+  # -- (iv) Within-window fixed-margin null ---------------------------
+  # For each (group, window): person-level binary matrix (symptom = 1
+  # if reported at any visit within the window), curveball null for
+  # modularity and assortativity. Observed values recomputed from the
+  # same matrix so the comparison is internally consistent.
+  message("  Within-window fixed-margin null (B = ", n_null, ") ...")
+  window_null <- list(); k <- 1
+  for (grp in c(0, 1)) {
+    for (tb in timebins) {
+      Xw_df <- df2 %>%
+        dplyr::filter(infected01 == grp, as.character(timebin) == tb) %>%
+        dplyr::select(dplyr::all_of(c(id_col, symptom_cols))) %>%
+        dplyr::mutate(dplyr::across(dplyr::all_of(symptom_cols), to01)) %>%
+        dplyr::group_by(.data[[id_col]]) %>%
+        dplyr::summarise(dplyr::across(dplyr::all_of(symptom_cols), max),
+                         .groups = "drop")
+      if (nrow(Xw_df) < 10) next
+      Xw <- as.matrix(Xw_df[, symptom_cols])
+      storage.mode(Xw) <- "integer"
+      m_obs_w <- metrics_from_matrix(Xw, symptom_cols)
+      set.seed(seed_null + grp * 100 + k)
+      null_mod <- numeric(n_null); null_ass <- numeric(n_null)
+      for (b in seq_len(n_null)) {
+        m_b <- metrics_from_matrix(curveball_randomize(Xw), symptom_cols)
+        null_mod[b] <- m_b$modularity
+        null_ass[b] <- m_b$assortativity
+      }
+      window_null[[k]] <- tibble::tibble(
+        infected = grp, timebin = tb, n_participants = nrow(Xw),
+        modularity_obs  = m_obs_w$modularity,
+        modularity_null = mean(null_mod, na.rm = TRUE),
+        modularity_z    = z_score(null_mod, m_obs_w$modularity),
+        modularity_p    = emp_p(null_mod, m_obs_w$modularity),
+        assortativity_obs  = m_obs_w$assortativity,
+        assortativity_null = mean(null_ass, na.rm = TRUE),
+        assortativity_z    = z_score(null_ass, m_obs_w$assortativity),
+        assortativity_p    = emp_p(null_ass, m_obs_w$assortativity)
+      )
+      k <- k + 1
+    }
+  }
+  window_null_df <- dplyr::bind_rows(window_null) %>%
+    dplyr::mutate(group = ifelse(infected == 1, "Infected", "Uninfected"))
+  message("Within-window observed vs fixed-margin null:")
+  print(as.data.frame(window_null_df))
+  write.csv(window_null_df,
+            file.path(out_dir, "tables", "revision_5C_window_null_comparison.csv"),
+            row.names = FALSE)
+
+} else {
+  message("[5C] skipped: df2 (time-bin data) not available.")
+}
+
+########################################################################
+# 5D. NETWORK COMPARISON TEST VALIDATION (Comment 3.4)
+########################################################################
+# Independent check with the standard psychometric toolkit: eLasso
+# Ising networks per group (IsingFit) and the Network Comparison Test
+# (van Borkulo et al.) for global strength and structure invariance.
+# Requires: install.packages(c("IsingFit", "NetworkComparisonTest"))
+########################################################################
+
+message("\n[5D] Network Comparison Test validation ...")
+
+has_isingfit <- requireNamespace("IsingFit",              quietly = TRUE)
+has_nct      <- requireNamespace("NetworkComparisonTest", quietly = TRUE)
+
+if (!has_isingfit || !has_nct) {
+  message("[5D] SKIPPED - missing packages. Run:\n",
+          '  install.packages(c("IsingFit", "NetworkComparisonTest"))\n',
+          "then re-run this section.")
+} else {
+
+  # eLasso/IsingFit needs variation in every column: keep symptoms with
+  # at least 5 cases and 5 non-cases in BOTH groups.
+  min_cases <- 5
+  keep_syms <- symptom_cols[
+    colSums(X0) >= min_cases & colSums(X0) <= nrow(X0) - min_cases &
+    colSums(X1) >= min_cases & colSums(X1) <= nrow(X1) - min_cases
+  ]
+  dropped_syms <- setdiff(symptom_cols, keep_syms)
+  if (length(dropped_syms) > 0) {
+    message("  Dropped (insufficient variation for Ising estimation): ",
+            paste(clean_symptom_names(dropped_syms), collapse = ", "))
+  }
+  X0d <- X0[, keep_syms, drop = FALSE]
+  X1d <- X1[, keep_syms, drop = FALSE]
+
+  # -- Per-group eLasso Ising networks --------------------------------
+  ising_fit_safe <- function(X, label) {
+    tryCatch({
+      fit <- IsingFit::IsingFit(as.data.frame(X), family = "binomial",
+                                gamma = 0.25, plot = FALSE,
+                                progressbar = FALSE)
+      message("  IsingFit (", label, "): ",
+              sum(fit$weiadj[upper.tri(fit$weiadj)] != 0), " nonzero edges; ",
+              "global strength = ",
+              round(sum(abs(fit$weiadj[upper.tri(fit$weiadj)])), 2))
+      fit
+    }, error = function(e) {
+      message("  IsingFit failed for ", label, ": ", conditionMessage(e))
+      NULL
+    })
+  }
+  fit_ising0 <- ising_fit_safe(X0d, "Uninfected")
+  fit_ising1 <- ising_fit_safe(X1d, "Infected")
+
+  if (!is.null(fit_ising0)) {
+    write.csv(fit_ising0$weiadj,
+              file.path(out_dir, "tables", "revision_5D_ising_weights_uninfected.csv"))
+  }
+  if (!is.null(fit_ising1)) {
+    write.csv(fit_ising1$weiadj,
+              file.path(out_dir, "tables", "revision_5D_ising_weights_infected.csv"))
+  }
+
+  # -- Network Comparison Test ----------------------------------------
+  message("  Running NCT (it = ", nct_iterations, ") - this can take a while ...")
+  nct_res <- tryCatch(
+    NetworkComparisonTest::NCT(
+      data1        = as.data.frame(X0d),
+      data2        = as.data.frame(X1d),
+      it           = nct_iterations,
+      binary.data  = TRUE,
+      paired       = FALSE,
+      test.edges   = FALSE,
+      progressbar  = FALSE
+    ),
+    error = function(e) {
+      message("  NCT failed: ", conditionMessage(e))
+      NULL
+    }
+  )
+
+  if (!is.null(nct_res)) {
+    nct_summary <- tibble::tibble(
+      test = c("Global strength invariance",
+               "Network structure invariance (max edge diff)"),
+      statistic = c(nct_res$glstrinv.real, nct_res$nwinv.real),
+      p_value   = c(nct_res$glstrinv.pval, nct_res$nwinv.pval),
+      global_strength_uninfected = c(nct_res$glstrinv.sep[1], NA),
+      global_strength_infected   = c(nct_res$glstrinv.sep[2], NA)
+    )
+    message("NCT results:")
+    print(as.data.frame(nct_summary))
+    write.csv(nct_summary,
+              file.path(out_dir, "tables", "revision_5D_nct_results.csv"),
+              row.names = FALSE)
+    saveRDS(nct_res, file.path(out_dir, "data", "revision_5D_nct_raw.rds"))
+  }
+}
+
+########################################################################
+# 5E. SYNTHETIC DATASET FOR REPRODUCIBILITY (Comment 3.5)
+########################################################################
+# Generates a fully synthetic visit-level dataset that reproduces the
+# variable schema and per-group marginal symptom prevalences of the
+# cohort. All covariates are drawn INDEPENDENTLY from their per-group
+# marginal distributions and symptoms are drawn independently per
+# visit, so no real individual is recoverable. Point `data_path` at
+# the generated file to exercise the full pipeline end-to-end.
+########################################################################
+
+message("\n[5E] Generating synthetic dataset ...")
+
+set.seed(seed_synth)
+
+raw_cov_cols <- intersect(
+  c("AGE", "SEX", "CCI_TOTAL", "BMI", "smoking", "alcohol",
+    "Accumulate_vac", "marital_status", "househole_member",
+    "education_status", "JOB_PREINF"),
+  names(df_raw)
+)
+time_cols_present <- intersect(time_col, names(df_raw))
+
+synth_one_group <- function(grp, id_prefix) {
+  df_g <- df_raw %>%
+    dplyr::filter(as.integer(as.character(.data[[infect_col]])) == grp)
+  ids       <- unique(df_g[[id_col]])
+  n_persons <- length(ids)
+  visits_per_person <- as.integer(table(df_g[[id_col]]))
+  # per-visit symptom prevalence (what the pipeline actually consumes)
+  prev_visit <- vapply(symptom_cols,
+                       function(s) mean(to01(df_g[[s]])), numeric(1))
+  # person-level covariate pool (first row per person)
+  cov_pool <- df_g %>%
+    dplyr::group_by(.data[[id_col]]) %>%
+    dplyr::slice(1) %>%
+    dplyr::ungroup() %>%
+    dplyr::select(dplyr::all_of(raw_cov_cols))
+
+  person_rows <- lapply(seq_len(n_persons), function(i) {
+    nv <- sample(visits_per_person, 1)
+    row_i <- tibble::tibble(!!id_col := sprintf("%s%05d", id_prefix, i),
+                            !!infect_col := grp)
+    # covariates: each sampled independently from its marginal
+    for (cv in raw_cov_cols) {
+      row_i[[cv]] <- sample(cov_pool[[cv]], 1)
+    }
+    out <- row_i[rep(1, nv), ]
+    # visit times sampled from the group's empirical distribution
+    for (tc in time_cols_present) {
+      tvals <- df_g[[tc]][!is.na(df_g[[tc]])]
+      out[[tc]] <- if (length(tvals) > 0) sample(tvals, nv, replace = TRUE) else NA
+    }
+    # symptoms: independent Bernoulli draws at per-visit prevalence
+    for (s in symptom_cols) {
+      out[[s]] <- stats::rbinom(nv, 1, prev_visit[[s]])
+    }
+    out
+  })
+  dplyr::bind_rows(person_rows)
+}
+
+synthetic_df <- dplyr::bind_rows(
+  synth_one_group(0, "SYN_U"),
+  synth_one_group(1, "SYN_I")
+)
+
+# -- Save (xlsx if writexl available, so data_path can point directly
+#    at it; CSV fallback otherwise) -----------------------------------
+if (requireNamespace("writexl", quietly = TRUE)) {
+  synth_path <- file.path(out_dir, "data", "synthetic_longcovid.xlsx")
+  writexl::write_xlsx(synthetic_df, synth_path)
+} else {
+  synth_path <- file.path(out_dir, "data", "synthetic_longcovid.csv")
+  write.csv(synthetic_df, synth_path, row.names = FALSE)
+  message('  (install "writexl" to write xlsx readable by data_path directly)')
+}
+message("  Synthetic dataset written: ", synth_path,
+        "  (", nrow(synthetic_df), " rows, ",
+        dplyr::n_distinct(synthetic_df[[id_col]]), " synthetic persons)")
+
+# -- Verification: marginal prevalence, real vs synthetic -------------
+prev_check <- dplyr::bind_rows(lapply(c(0, 1), function(grp) {
+  real_g  <- df_raw %>%
+    dplyr::filter(as.integer(as.character(.data[[infect_col]])) == grp)
+  synth_g <- synthetic_df %>% dplyr::filter(.data[[infect_col]] == grp)
+  tibble::tibble(
+    group           = ifelse(grp == 1, "Infected", "Uninfected"),
+    symptom         = symptom_cols,
+    symptom_clean   = clean_symptom_names(symptom_cols),
+    prev_real       = vapply(symptom_cols, function(s) mean(to01(real_g[[s]])),  numeric(1)),
+    prev_synthetic  = vapply(symptom_cols, function(s) mean(to01(synth_g[[s]])), numeric(1))
+  ) %>%
+    dplyr::mutate(abs_diff = abs(prev_real - prev_synthetic))
+}))
+message("Prevalence match (max abs difference, per group):")
+print(prev_check %>%
+        dplyr::group_by(group) %>%
+        dplyr::summarise(max_abs_diff  = max(abs_diff),
+                         mean_abs_diff = mean(abs_diff), .groups = "drop") %>%
+        as.data.frame())
+write.csv(prev_check,
+          file.path(out_dir, "tables", "revision_5E_synthetic_prevalence_check.csv"),
+          row.names = FALSE)
+
+message("\n  To reproduce the pipeline on synthetic data, set at the top:\n",
+        '    data_path <- "', synth_path, '"\n',
+        "  and re-run the script from Section 2 onward.")
+
+########################################################################
+# DONE - revision analyses
+########################################################################
+message("\n=== Revision analyses complete ===\n",
+        "New outputs (prefix 'revision_') in:\n",
+        "  ", file.path(out_dir, "tables"), "\n",
+        "  ", file.path(out_dir, "figures"), "\n",
+        "Plus restored Fig S5: delta_pagerank_slopes_forest.png")
