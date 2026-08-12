@@ -60,12 +60,13 @@
 #                (supporting: revision_5B_*.csv)
 #   Section 8 (robustness of the longitudinal analyses)
 #     Table S6   revision_5C_attrition_table.csv                   (5C)
-#     Table S7   revision_5C_cluster_bootstrap_ci_comparison.csv   (5C)
-#     Table S8   revision_5C_one_obs_per_person_metrics.csv        (5C)
-#                (supporting: revision_5C_one_obs_trend_density.png)
-#     Table S9   revision_5C_window_null_comparison.csv            (5C)
+#     Table S7   revision_5C_one_obs_per_person_metrics.csv        (5C)
+#     Figure S6  revision_5C_one_obs_trend_density.png             (5C)
+#     Table S8   revision_5C_window_null_comparison.csv            (5C)
+#                (supporting: revision_5C_cluster_bootstrap_ci_comparison.csv,
+#                 reported in text in appendix section 8.2)
 #   Section 9 (psychometric validation)
-#     Table S10  revision_5D_nct_results.csv                       (5D)
+#     Table S9   revision_5D_nct_results.csv                       (5D)
 #                (supporting: revision_5D_ising_weights_*.csv)
 #
 # Additional outputs (sensitivity / diagnostics, not shown in the paper):

@@ -58,10 +58,10 @@ and the Network Comparison Test).
 | §6, Table S5 — edge-weight normalization sensitivity | `revision_5A_normalization_concordance.csv` | 5A |
 | §7, Figure S5 — strength vs weighted PageRank | `revision_5B_strength_vs_pagerank.png` (+ `revision_5B_*.csv`) | 5B |
 | §8, Table S6 — attrition and network coverage | `revision_5C_attrition_table.csv` | 5C |
-| §8, Table S7 — cluster vs unit-level bootstrap CIs | `revision_5C_cluster_bootstrap_ci_comparison.csv` | 5C |
-| §8, Table S8 — one-window-per-person sensitivity | `revision_5C_one_obs_per_person_metrics.csv` (+ `revision_5C_one_obs_trend_density.png`) | 5C |
-| §8, Table S9 — within-window null comparison | `revision_5C_window_null_comparison.csv` | 5C |
-| §9, Table S10 — Network Comparison Test | `revision_5D_nct_results.csv` (+ `revision_5D_ising_weights_*.csv`) | 5D |
+| §8, Table S7 / Figure S6 — one-window-per-person sensitivity | `revision_5C_one_obs_per_person_metrics.csv`, `revision_5C_one_obs_trend_density.png` | 5C |
+| §8, Table S8 — within-window null comparison | `revision_5C_window_null_comparison.csv` | 5C |
+| §8.2 (in text) — cluster vs unit-level bootstrap CIs | `revision_5C_cluster_bootstrap_ci_comparison.csv` | 5C |
+| §9, Table S9 — Network Comparison Test | `revision_5D_nct_results.csv` (+ `revision_5D_ising_weights_*.csv`) | 5D |
 
 Additional outputs (IPW-weighted network results, temporal trend
 plots, the per-symptom slope forest, per-window node tables) are
