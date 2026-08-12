@@ -897,72 +897,75 @@ if (!is.null(time_col) && time_col %in% names(df)) {
   }
 
   # -- Bootstrap CIs for time-bin network metrics -----------------------
+  # Unit-level bootstrap: units are person-window symptom profiles
+  # (symptom = reported at any visit within the window), and resampled
+  # duplicates count individually via matrix-based co-occurrence
+  # counting, so intervals are centered on the observed estimates.
+  # (An earlier implementation resampled visit rows and collapsed
+  # duplicated units under distinct-unit counting, which biased
+  # co-occurrence totals downward by approximately 1 - 1/e.)
   bootstrap_timebin_metrics <- function(df2, id_col, symptom_cols,
                                         infect_col = "infected01",
                                         timebin_col = "timebin",
                                         B = 300,
                                         seed = 123) {
     set.seed(seed)
-    
     tb_levels <- c("0-3", "3-6", "6-12", "12-24")
-    out <- list()
-    k <- 1
-    
+
+    units_all <- df2 %>%
+      dplyr::filter(!is.na(.data[[timebin_col]]),
+                    as.character(.data[[timebin_col]]) %in% tb_levels) %>%
+      dplyr::select(dplyr::all_of(c(id_col, infect_col, timebin_col,
+                                    symptom_cols))) %>%
+      dplyr::mutate(dplyr::across(dplyr::all_of(symptom_cols), to01)) %>%
+      dplyr::group_by(.data[[id_col]], .data[[infect_col]],
+                      .data[[timebin_col]]) %>%
+      dplyr::summarise(dplyr::across(dplyr::all_of(symptom_cols), max),
+                       .groups = "drop")
+
+    metrics_from_units <- function(X) {
+      A <- crossprod(X); diag(A) <- 0
+      keep <- rowSums(A) > 0
+      A <- A[keep, keep, drop = FALSE]
+      if (nrow(A) < 2) {
+        return(c(density = NA_real_, modularity = NA_real_,
+                 pagerank_gini = NA_real_, assort = NA_real_))
+      }
+      g <- igraph::graph_from_adjacency_matrix(A, mode = "undirected",
+                                               weighted = TRUE, diag = FALSE)
+      comm <- igraph::cluster_louvain(g, weights = igraph::E(g)$weight)
+      pr <- igraph::page_rank(g, weights = igraph::E(g)$weight)$vector
+      c(density = sum(igraph::E(g)$weight) /
+          (igraph::vcount(g) * (igraph::vcount(g) - 1) / 2),
+        modularity    = igraph::modularity(comm),
+        pagerank_gini = ineq::ineq(pr, type = "Gini"),
+        assort        = weighted_assortativity_strength(g))
+    }
+
+    out <- list(); k <- 1
     for (grp in c(0, 1)) {
       for (tb in tb_levels) {
-        
-        df_sub <- df2 %>%
-          filter(.data[[infect_col]] == grp,
-                 as.character(.data[[timebin_col]]) == tb)
-        
-        n_sub <- nrow(df_sub)
-        if (n_sub < 2) next
-        
-        boot_list <- vector("list", B)
-        
-        for (b in seq_len(B)) {
-          samp <- df_sub[sample(seq_len(n_sub), size = n_sub, replace = TRUE), , drop = FALSE]
-          
-          net <- build_symptom_network_timeslice(samp, id_col, symptom_cols, timebin_col)
-          g   <- net$graph
-          
-          boot_list[[b]] <- tibble(
-            infected = grp,
-            timebin  = tb,
-            weighted_density = if (ecount(g) > 0) {
-              sum(E(g)$weight) / (vcount(g) * (vcount(g) - 1) / 2)
-            } else NA_real_,
-            modularity = modularity_safe(net$comm),
-            pagerank_gini = pagerank_gini_safe(g),
-            strength_assortativity = if (ecount(g) > 0) weighted_assortativity_strength(g) else NA_real_
-          )
-        }
-        
-        boot_df <- bind_rows(boot_list)
-        
-        out[[k]] <- boot_df %>%
-          summarise(
-            infected = grp,
-            timebin  = tb,
-            
-            wd_lcl = quantile(weighted_density, 0.025, na.rm = TRUE),
-            wd_ucl = quantile(weighted_density, 0.975, na.rm = TRUE),
-            
-            mod_lcl = quantile(modularity, 0.025, na.rm = TRUE),
-            mod_ucl = quantile(modularity, 0.975, na.rm = TRUE),
-            
-            pg_lcl = quantile(pagerank_gini, 0.025, na.rm = TRUE),
-            pg_ucl = quantile(pagerank_gini, 0.975, na.rm = TRUE),
-            
-            assort_lcl = quantile(strength_assortativity, 0.025, na.rm = TRUE),
-            assort_ucl = quantile(strength_assortativity, 0.975, na.rm = TRUE)
-          )
-        
+        U <- units_all %>%
+          dplyr::filter(.data[[infect_col]] == grp,
+                        as.character(.data[[timebin_col]]) == tb)
+        if (nrow(U) < 2) next
+        X <- as.matrix(U[, symptom_cols])
+        storage.mode(X) <- "integer"
+        boot <- replicate(B, metrics_from_units(
+          X[sample(nrow(X), nrow(X), replace = TRUE), , drop = FALSE]))
+        qs <- apply(boot, 1, stats::quantile, probs = c(0.025, 0.975),
+                    na.rm = TRUE)
+        out[[k]] <- tibble::tibble(
+          infected   = grp,
+          timebin    = tb,
+          wd_lcl     = qs[1, "density"],       wd_ucl     = qs[2, "density"],
+          mod_lcl    = qs[1, "modularity"],    mod_ucl    = qs[2, "modularity"],
+          pg_lcl     = qs[1, "pagerank_gini"], pg_ucl     = qs[2, "pagerank_gini"],
+          assort_lcl = qs[1, "assort"],        assort_ucl = qs[2, "assort"])
         k <- k + 1
       }
     }
-    
-    bind_rows(out)
+    dplyr::bind_rows(out)
   }
   
   
